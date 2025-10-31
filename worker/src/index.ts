@@ -1,4 +1,5 @@
 import { Hono } from "hono";
+import { cors } from "hono/cors";
 import type { Bindings } from "./types/database";
 import { createTrackingSession } from "./routes/track";
 import { getPaymentPage } from "./routes/paymentPage";
@@ -8,6 +9,14 @@ import { scheduledHandler } from "./scheduled/cron";
 import { triggerCronManually } from "./routes/test-cron";
 
 const app = new Hono<{ Bindings: Bindings }>();
+
+// CORS middleware - allow requests from admin-ops frontend
+app.use('*', cors({
+  origin: ['http://localhost:5173', 'http://localhost:5174'], // SvelteKit dev server
+  allowMethods: ['GET', 'POST', 'OPTIONS'],
+  allowHeaders: ['Content-Type'],
+  credentials: true,
+}));
 
 app.get("/", (c) => {
   return c.json({ 

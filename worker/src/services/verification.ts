@@ -8,6 +8,7 @@
 import type { Tracking, Transaction } from '../types/database'
 import { DatabaseService } from './db'
 import { normalizeTrxID } from './smsParser'
+import { triggerFulfillment } from './fulfillment'
 
 export interface VerificationResult {
   success: boolean
@@ -33,11 +34,19 @@ export async function verifyPayment(
   db: DatabaseService
 ): Promise<VerificationResult> {
   
+  console.log('[Verify] Starting verification:', {
+    tracking_id: tracking.tracking_id,
+    transaction_id: transaction.id,
+    tracking_trxid: tracking.user_entered_trxid,
+    transaction_trxid: transaction.trxid
+  })
+  
   // Rule 1: TrxID Match (normalized comparison)
   const trackingTrxID = normalizeTrxID(tracking.user_entered_trxid || '')
   const transactionTrxID = normalizeTrxID(transaction.trxid)
   
   if (trackingTrxID !== transactionTrxID) {
+    console.log('[Verify] FAILED: TrxID mismatch')
     return {
       success: false,
       status: 'failed',
@@ -51,6 +60,7 @@ export async function verifyPayment(
     const expectedTaka = (tracking.payment_amount_cents / 100).toFixed(2)
     const actualTaka = (transaction.amount_cents / 100).toFixed(2)
     
+    console.log('[Verify] FAILED: Amount mismatch', { expected: tracking.payment_amount_cents, got: transaction.amount_cents })
     return {
       success: false,
       status: 'failed',
@@ -63,6 +73,7 @@ export async function verifyPayment(
   const offeredReceivers: string[] = JSON.parse(tracking.offered_receivers)
   
   if (!offeredReceivers.includes(transaction.receiver_phone)) {
+    console.log('[Verify] FAILED: Receiver not in list', { receiver: transaction.receiver_phone, offered: offeredReceivers })
     return {
       success: false,
       status: 'failed',
@@ -81,6 +92,13 @@ export async function verifyPayment(
   const latestAllowed = new Date(trackingExpiresAt.getTime() + 15 * 60 * 1000)   // +15 minutes
   
   if (transactionReceivedAt < earliestAllowed || transactionReceivedAt > latestAllowed) {
+    console.log('[Verify] FAILED: Time window violation', {
+      transaction_time: transaction.received_at,
+      earliest: earliestAllowed.toISOString(),
+      latest: latestAllowed.toISOString(),
+      tracking_created: tracking.created_at,
+      tracking_expires: tracking.expires_at
+    })
     return {
       success: false,
       status: 'failed',
@@ -97,6 +115,7 @@ export async function verifyPayment(
   )
   
   if (alreadyMatched) {
+    console.log('[Verify] FAILED: Duplicate TrxID')
     return {
       success: false,
       status: 'failed',
@@ -106,6 +125,7 @@ export async function verifyPayment(
   }
   
   // All rules passed - verification successful!
+  console.log('[Verify] SUCCESS: All rules passed!')
   return {
     success: true,
     status: 'verified',
@@ -177,6 +197,21 @@ export async function attemptVerification(
       matched_transaction_id: result.matched_transaction_id,
       notes: 'Verified successfully'
     })
+    
+    // Trigger fulfillment (non-blocking)
+    const customerInfo = JSON.parse(tracking.customer_info_json)
+    triggerFulfillment({
+      tracking_id: tracking.tracking_id,
+      transaction_id: transaction.id,
+      customer_info: customerInfo,
+      payment_amount_cents: tracking.payment_amount_cents,
+      item_code: tracking.item_code,
+      ticket_choice: tracking.ticket_choice
+    }).catch(err => {
+      console.error('[Verification] Fulfillment error:', err)
+      // Don't fail verification if fulfillment fails
+    })
+    
   } else if (result.status === 'failed') {
     await db.tracking.updateStatus(trackingId, 'failed', {
       notes: result.failure_reason
@@ -233,6 +268,20 @@ export async function verifyIncomingTransaction(
         matched_transaction_id: result.matched_transaction_id,
         notes: 'Verified successfully'
       })
+      
+      // Trigger fulfillment (non-blocking)
+      const customerInfo = JSON.parse(tracking.customer_info_json)
+      triggerFulfillment({
+        tracking_id: tracking.tracking_id,
+        transaction_id: transaction.id,
+        customer_info: customerInfo,
+        payment_amount_cents: tracking.payment_amount_cents,
+        item_code: tracking.item_code,
+        ticket_choice: tracking.ticket_choice
+      }).catch(err => {
+        console.error('[Verification] Fulfillment error:', err)
+      })
+      
     } else if (result.status === 'failed') {
       await db.tracking.updateStatus(tracking.tracking_id, 'failed', {
         notes: result.failure_reason
