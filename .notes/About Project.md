@@ -43,16 +43,21 @@ The payment system is part of a larger ticketing website. Here's how it works fr
 
 Since bKash doesn't have an API for payment verification (not even for merchant accounts), we rely on SMS receipts that bKash sends whenever you receive money. 
 
+These SMS messages look like this:
+```
+You have received Tk 500.00 from 01533817247. Fee Tk 0.00. Balance Tk 1,117.78. TrxID CJU0PZQ3U6 at 30/10/2025 21:02
+```
+
 We have two ways to handle this:
 
-1. **Automated (preferred)**: An Android phone with automation reads incoming bKash SMS and sends the payment details to our system automatically
-2. **Manual backup**: If automation fails, we can manually forward the SMS to a simple admin interface that processes it
+1. **Automated (preferred)**: An Android phone with automation (like Tasker or MacroDroid) reads incoming bKash SMS and sends the raw text to our system automatically. The system then parses it to extract the transaction details.
+
+2. **Manual backup**: If automation fails, we can manually copy-paste the SMS into a simple admin interface that sends it to our system for processing.
 
 Either way, the system parses the SMS to extract:
-- Transaction ID
+- Transaction ID (TrxID)
 - Amount received
 - Sender's number
-- Which of our numbers received the money
 - Timestamp
 
 The system then matches this against pending payments. If the TrxID matches what the customer entered, the amount is correct, and it was sent to one of our numbers within the 1-hour window, the payment is verified and the customer gets their confirmation email.

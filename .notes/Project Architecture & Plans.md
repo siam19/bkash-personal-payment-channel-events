@@ -203,54 +203,89 @@ Static configuration of personal bKash numbers we accept payments to (1–3 numb
 
 ### 4. POST /webhooks/sms
 
-**Purpose:** Ingest payment SMS from Android automation or manual paste.
+**Purpose:** Ingest raw bKash SMS from Android automation or manual paste, parse it, and store transaction.
 
 **Request Body (JSON):**
 ```json
 {
-  "trxid": "A1B2C3D4E5",
-  "amount_cents": 50000,
-  "receiver_phone": "01812345678",
-  "sender_phone": "01712345678",
-  "received_at": "2025-10-31T12:34:56Z"
+  "raw_sms": "You have received Tk 500.00 from 01533817247. Fee Tk 0.00. Balance Tk 1,117.78. TrxID CJU0PZQ3U6 at 30/10/2025 21:02",
+  "receiver_phone": "01812345678"
 }
+```
+
+**Example SMS formats:**
+```
+You have received Tk 500.00 from 01533817247. Fee Tk 0.00. Balance Tk 1,117.78. TrxID CJU0PZQ3U6 at 30/10/2025 21:02
+You have received Tk 2,000.00 from 01785662731. Fee Tk 0.00. Balance Tk 3,117.78. TrxID CJU5Q1I0TB at 30/10/2025 21:47
 ```
 
 **Response:**
 ```json
 {
   "status": "ok",
-  "transaction_id": "01HQABC..."
+  "transaction_id": "01HQABC...",
+  "parsed": {
+    "trxid": "CJU0PZQ3U6",
+    "amount_cents": 50000,
+    "sender_phone": "01533817247",
+    "received_at": "2025-10-30T21:02:00Z"
+  }
 }
 ```
 
 **Logic:**
-1. **Validation:**
-   - Normalize TrxID (trim spaces).
-   - Check `receiver_phone` is in `receivers_table` with `status='active'` or exists historically.
-   - Validate `amount_cents > 0`.
-   - Validate `received_at` is a valid ISO timestamp.
 
-2. **Idempotency:**
-   - Attempt to insert into `transactions_table` with unique constraint on `trxid`.
-   - If duplicate → return existing `transaction_id` (idempotent success).
+1. **Parse SMS:**
+   - Extract amount using regex: `Tk ([\d,]+\.\d{2})`
+     - Remove commas and convert to cents (multiply by 100)
+   - Extract sender phone: `from (\d{11})`
+   - Extract TrxID: `TrxID ([A-Z0-9]+)`
+   - Extract timestamp: `at (\d{2}/\d{2}/\d{4} \d{2}:\d{2})`
+     - Convert to ISO 8601 format
+   - Normalize TrxID (trim spaces, uppercase)
 
-3. **Trigger verification:**
+2. **Validation:**
+   - All required fields extracted successfully (amount, sender_phone, trxid, timestamp)
+   - Check `receiver_phone` is in `receivers_table` (active or historically valid)
+   - Validate amount > 0
+   - If parsing fails → return 400 error with details
+
+3. **Idempotency:**
+   - Attempt to insert into `transactions_table` with unique constraint on `trxid`
+   - If duplicate → return existing `transaction_id` (idempotent success, 200 status)
+
+4. **Trigger verification:**
    - After successful insert, search for any `tracking_table` rows with:
      - `status IN ('pending', 'submitted_trx')`
-     - `user_entered_trxid = trxid` (exact match)
-   - If found, run verification algorithm.
+     - `user_entered_trxid = trxid` (exact match after normalization)
+   - If found, run verification algorithm
 
-4. Return success.
+5. Return success with parsed data for transparency
+
+**Parsing Patterns (configurable):**
+```javascript
+{
+  amount: /Tk ([\d,]+\.\d{2})/,
+  sender: /from (\d{11})/,
+  trxid: /TrxID ([A-Z0-9]+)/,
+  timestamp: /at (\d{2}\/\d{2}\/\d{4} \d{2}:\d{2})/
+}
+```
+
+**Error Handling:**
+- If regex doesn't match → 400 Bad Request with `{error: "Failed to parse SMS", field: "amount"}` 
+- If receiver_phone not in allowlist → 400 Bad Request with `{error: "Invalid receiver phone"}`
+- Log all failed parsing attempts for pattern refinement
 
 **Security (MVP):**
-- No authentication in this version.
+- No authentication in this version
 - Mitigations:
-  - Rate limit per IP (e.g., 10 req/min).
-  - Validate `receiver_phone` is in our allowlist.
-  - Log all requests for audit.
+  - Rate limit per IP (e.g., 10 req/min)
+  - Validate `receiver_phone` is in our allowlist
+  - Log all requests for audit
+  - Idempotency via unique TrxID prevents duplicate processing
 
-**Future:** Add HMAC signature header or shared Bearer token.
+**Future:** Add HMAC signature header or shared Bearer token
 
 ---
 
@@ -258,18 +293,26 @@ Static configuration of personal bKash numbers we accept payments to (1–3 numb
 
 **Purpose:** Manual backup interface for forwarding SMS.
 
-**Request:** HTML form or JSON with `raw_sms` text.
+**Request:** HTML form or JSON with `raw_sms` text and `receiver_phone`.
+
+**Example Form Input:**
+```
+Raw SMS: You have received Tk 500.00 from 01533817247. Fee Tk 0.00. Balance Tk 1,117.78. TrxID CJU0PZQ3U6 at 30/10/2025 21:02
+Receiver Phone: 01812345678
+```
 
 **Logic:**
-1. Parse SMS text using regex patterns to extract:
-   - TrxID
-   - Amount
-   - Receiver phone
-   - Sender phone
-   - Timestamp
-2. Forward parsed fields to `/webhooks/sms` internally.
+1. Accept raw SMS text from textarea input.
+2. Forward to `/webhooks/sms` internally with `{raw_sms, receiver_phone}`.
+3. Display success or parsing errors to admin.
 
-**UI:** Simple HTML page with textarea and submit button. Optionally add basic auth (username/password) later.
+**UI:** Simple HTML page with:
+- Textarea for pasting SMS
+- Dropdown or input for selecting/entering receiver phone number
+- Submit button
+- Response display (parsed data or error message)
+
+**Optional:** Add basic auth (username/password) later for security.
 
 ---
 
@@ -354,6 +397,20 @@ Static configuration of personal bKash numbers we accept payments to (1–3 numb
 - `D1_BINDING`: Name of the D1 database binding.
 - `VERIFICATION_METHOD_DEFAULT`: `'auto'` or `'manual'` (can be overridden per tracking row).
 
+**SMS Parsing Configuration:**
+The system uses regex patterns to parse bKash SMS. Patterns are tuned for this format:
+```
+You have received Tk 500.00 from 01533817247. Fee Tk 0.00. Balance Tk 1,117.78. TrxID CJU0PZQ3U6 at 30/10/2025 21:02
+```
+
+Default patterns:
+- Amount: `/Tk ([\d,]+\.\d{2})/`
+- Sender: `/from (\d{11})/`
+- TrxID: `/TrxID ([A-Z0-9]+)/`
+- Timestamp: `/at (\d{2}\/\d{2}\/\d{4} \d{2}:\d{2})/`
+
+These can be made configurable via environment variables or database config if SMS format varies by locale/carrier.
+
 **Database Initialization:**
 Run migration SQL to create tables and seed `receivers_table` with initial active phones.
 
@@ -430,12 +487,20 @@ Run migration SQL to create tables and seed `receivers_table` with initial activ
 1. Call `POST /track` with sample customer data → get `tracking_id`.
 2. Open `GET /bkash-personal/{tracking_id}` in browser → see payment page.
 3. (Simulate) Send payment via bKash app to one of the receiver numbers.
-4. Call `POST /webhooks/sms` with the payment details (TrxID, amount, receiver).
-5. Call `POST /bkash-personal/{tracking_id}/submit-trx` with the same TrxID.
-6. Verify in D1:
+4. Call `POST /webhooks/sms` with raw SMS text:
+   ```json
+   {
+     "raw_sms": "You have received Tk 500.00 from 01533817247. Fee Tk 0.00. Balance Tk 1,117.78. TrxID CJU0PZQ3U6 at 30/10/2025 21:02",
+     "receiver_phone": "01812345678"
+   }
+   ```
+5. Verify parsing in response → should show extracted TrxID, amount, sender, timestamp.
+6. Call `POST /bkash-personal/{tracking_id}/submit-trx` with the TrxID: `{"trxid": "CJU0PZQ3U6"}`.
+7. Verify in D1:
    - `tracking_table.status = 'verified'`
    - `tracking_table.matched_transaction_id` points to the transaction.
-7. Check logs for stubbed email output.
+   - `transactions_table` has the parsed data.
+8. Check logs for stubbed email output.
 
 **Future Phases:**
 - Phase 2: Add HMAC auth, better SMS parsing, real email provider.
