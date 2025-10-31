@@ -199,27 +199,84 @@ interface ParseResult {
 - Provide clean API for business logic
 
 ### Tasks
-- [ ] Create `src/services/db.ts` with D1 wrapper
-- [ ] Implement `receivers` operations (list active, get by phone)
-- [ ] Implement `transactions` operations (insert, get by TrxID, check duplicates)
-- [ ] Implement `tracking` operations (create, update status, get by ID)
-- [ ] Add proper TypeScript types for all operations
-- [ ] Handle database errors gracefully
-- [ ] Add helper for JSON field serialization/deserialization
-- [ ] Create query builders for complex lookups
+- [x] Create `src/services/db.ts` with D1 wrapper
+- [x] Implement `receivers` operations (list active, get by phone)
+- [x] Implement `transactions` operations (insert, get by TrxID, check duplicates)
+- [x] Implement `tracking` operations (create, update status, get by ID)
+- [x] Add proper TypeScript types for all operations
+- [x] Handle database errors gracefully
+- [x] Add helper for JSON field serialization/deserialization
+- [x] Create query builders for complex lookups
 
 ### Acceptance Criteria
-- All database operations type-safe
-- Unique constraint on `transactions.trxid` enforced
-- JSON fields properly serialized/deserialized
-- Clear error messages for constraint violations
-- Can perform all operations needed by verification logic
+- [x] All database operations type-safe
+- [x] Unique constraint on `transactions.trxid` enforced
+- [x] JSON fields properly serialized/deserialized
+- [x] Clear error messages for constraint violations
+- [x] Can perform all operations needed by verification logic
 
 ### Questions Before Starting
-*To be determined after Phase 2*
+None - implementation based on Phase 1 schema
 
 ### Context for Future Phases
-*To be filled after completion*
+
+**Completed:** Phase 3 - Database Service Layer
+
+**Files Created:**
+- `src/services/db.ts` - Complete database service layer with type-safe operations
+
+**Service Classes:**
+```typescript
+class ReceiversService {
+  getActive(): Promise<Receiver[]>
+  getByPhone(phone: string): Promise<Receiver | null>
+  isValidReceiver(phone: string): Promise<boolean>
+}
+
+class TransactionsService {
+  create(data): Promise<{ transaction, isNew }>
+  getByTrxID(trxid): Promise<Transaction | null>
+  getByID(id): Promise<Transaction | null>
+}
+
+class TrackingService {
+  create(data): Promise<Tracking>
+  getByID(tracking_id): Promise<Tracking | null>
+  submitTrxID(tracking_id, trxid): Promise<void>
+  updateStatus(tracking_id, status, options): Promise<void>
+  findByTrxID(trxid): Promise<Tracking[]>
+  findExpired(): Promise<Tracking[]>
+  findPendingVerification(): Promise<Tracking[]>
+  expireSessions(tracking_ids): Promise<void>
+}
+
+class DatabaseService {
+  receivers: ReceiversService
+  transactions: TransactionsService
+  tracking: TrackingService
+}
+```
+
+**Key Features:**
+- **Idempotency**: `transactions.create()` handles duplicate TrxID gracefully (returns existing)
+- **Auto ULID**: All IDs generated automatically using `ulid()`
+- **JSON handling**: Automatic serialization/deserialization for JSON fields
+- **Type-safety**: All operations use TypeScript interfaces from `types/database.ts`
+- **Error handling**: Try-catch for unique constraint violations
+- **Expiry calculation**: Automatically sets `expires_at` to +1 hour on tracking creation
+- **Status updates**: Atomic updates with timestamp tracking
+
+**Helper Function:**
+```typescript
+createDatabaseService(db: D1Database): DatabaseService
+```
+
+**Notes for Next Phases:**
+- Use `createDatabaseService(c.env.DB)` in route handlers
+- JSON fields stored as strings, parsed when needed
+- Tracking status transitions handled via `updateStatus()`
+- Batch operations available for cron (expireSessions)
+- Ready for integration in Phase 4 (POST /track endpoint)
 
 ---
 
@@ -232,31 +289,84 @@ interface ParseResult {
 - Return redirect URL and session details
 
 ### Tasks
-- [ ] Create `src/routes/track.ts` route handler
-- [ ] Install and configure ULID/nanoid library
-- [ ] Implement tracking ID generation
-- [ ] Query active receivers from database
-- [ ] Validate request body (item_code, amount, customer info)
-- [ ] Calculate expires_at (created_at + 1 hour)
-- [ ] Insert tracking record with all fields
-- [ ] Return JSON response with tracking_id and redirect URL
-- [ ] Add error handling for missing receivers
-- [ ] Test with sample customer data
+- [x] Create `src/routes/track.ts` route handler
+- [x] Install and configure ULID/nanoid library
+- [x] Implement tracking ID generation
+- [x] Query active receivers from database
+- [x] Validate request body (item_code, amount, customer info)
+- [x] Calculate expires_at (created_at + 1 hour)
+- [x] Insert tracking record with all fields
+- [x] Return JSON response with tracking_id and redirect URL
+- [x] Add error handling for missing receivers
+- [x] Test with sample customer data
 
 ### Acceptance Criteria
-- POST /track accepts valid JSON request
-- Generates unique tracking ID
-- Stores all customer info in tracking_table
-- Returns correct redirect URL
-- Sets expires_at to 1 hour from creation
-- Snapshots all active receivers into offered_receivers
-- Returns 400 for invalid requests
+- [x] POST /track accepts valid JSON request
+- [x] Generates unique tracking ID
+- [x] Stores all customer info in tracking_table
+- [x] Returns correct redirect URL
+- [x] Sets expires_at to 1 hour from creation
+- [x] Snapshots all active receivers into offered_receivers
+- [x] Returns 400 for invalid requests
 
 ### Questions Before Starting
-*To be determined after Phase 3*
+None - clear implementation from architecture
 
 ### Context for Future Phases
-*To be filled after completion*
+
+**Completed:** Phase 4 - POST /track - Create Payment Session
+
+**Files Created/Modified:**
+- `src/routes/track.ts` - Payment session creation endpoint
+- `src/index.ts` - Added POST /track route
+- `src/types/database.ts` - Added Bindings interface export
+- `wrangler.jsonc` - Fixed D1 binding name to "DB"
+
+**Endpoint:** `POST /track`
+
+**Request Body:**
+```json
+{
+  "item_code": "TICKET_TIER_A",
+  "payment_amount_cents": 50000,
+  "customer_info": {
+    "name": "John Doe",
+    "phone": "01712345678",
+    "email": "john@example.com"
+  },
+  "ticket_choice": "Early Bird - Tier A",
+  "form_data": {} // optional
+}
+```
+
+**Response:** (201 Created)
+```json
+{
+  "tracking_id": "01JBY...",
+  "redirect_url": "http://localhost:8787/bkash-personal/01JBY...",
+  "expires_at": "2025-10-31T06:00:02.378Z"
+}
+```
+
+**Validation:**
+- All required fields checked
+- payment_amount_cents must be > 0
+- Returns 503 if no active receivers available
+- Returns 500 for database errors
+
+**Key Features:**
+- ULID generation for tracking_id
+- Automatic expires_at calculation (+1 hour)
+- Snapshots all active receivers into session
+- Returns dynamic redirect URL based on request origin
+- Type-safe with TypeScript
+
+**Tested:** ✓ Successfully created tracking session via HTTP POST
+
+**Notes for Next Phases:**
+- Redirect URL currently uses request origin (works for dev and production)
+- Could add environment variable for custom base URL in future
+- All JSON fields properly serialized by db service layer
 
 ---
 
@@ -270,31 +380,80 @@ interface ParseResult {
 - Provide TrxID input form
 
 ### Tasks
-- [ ] Create `src/routes/payment-page.ts` route handler
-- [ ] Implement tracking session lookup by ID
-- [ ] Check if session expired or invalid
-- [ ] Render HTML template with Hono's `html` helper
-- [ ] Display offered_receivers list
-- [ ] Display payment_amount_cents formatted as Taka
-- [ ] Add countdown timer or expiry notice
-- [ ] Create TrxID submission form (POST to submit-trx endpoint)
-- [ ] Style basic CSS for readability
-- [ ] Add error page for expired/invalid sessions
+- [x] Create `src/routes/payment-page.ts` route handler
+- [x] Implement tracking session lookup by ID
+- [x] Check if session expired or invalid
+- [x] Render HTML template with Hono's `html` helper
+- [x] Display offered_receivers list
+- [x] Display payment_amount_cents formatted as Taka
+- [x] Add countdown timer or expiry notice
+- [x] Create TrxID submission form (POST to submit-trx endpoint)
+- [x] Style basic CSS for readability
+- [x] Add error page for expired/invalid sessions
 
 ### Acceptance Criteria
-- GET /bkash-personal/:trackingId returns HTML page
-- Shows all receiver phone numbers from session
-- Displays correct payment amount
-- Shows expiry information
-- Form submits to correct endpoint
-- Returns 404 for invalid tracking ID
-- Shows error message for expired sessions
+- [x] GET /bkash-personal/:trackingId returns HTML page
+- [x] Shows all receiver phone numbers from session
+- [x] Displays correct payment amount
+- [x] Shows expiry information
+- [x] Form submits to correct endpoint
+- [x] Returns 404 for invalid tracking ID
+- [x] Shows error message for expired sessions
 
 ### Questions Before Starting
-*To be determined after Phase 4*
+None - used Hono docs for HTML rendering and form handling
 
 ### Context for Future Phases
-*To be filled after completion*
+
+**Completed:** Phase 5 - GET /bkash-personal/:trackingId - Payment Page
+
+**Files Created:**
+- `src/templates/paymentPage.ts` - Separate HTML template file for easy customization
+- `src/routes/paymentPage.ts` - Payment page route handler
+- `src/index.ts` - Added GET route
+
+**Endpoint:** `GET /bkash-personal/:trackingId`
+
+**Template Functions:**
+```typescript
+renderPaymentPage(data: PaymentPageData): string
+renderErrorPage(message: string, statusCode: number): string
+```
+
+**Features:**
+- **Responsive Design**: Mobile-first CSS with gradient background
+- **Form Validation**: Client-side uppercase conversion, pattern matching
+- **AJAX Submit**: Form submits via fetch API without page reload
+- **Success Screen**: Dynamic thank-you message on successful submission
+- **Error Handling**: Shows specific errors for expired/invalid/verified sessions
+- **Status Checks**: 
+  - 404 if tracking ID doesn't exist
+  - 410 if session expired
+  - 410 if already verified
+- **Amount Formatting**: Converts cents to Taka with 2 decimals (50000 → ৳ 500.00)
+- **Time Display**: Shows minutes remaining until expiry
+- **Clear Instructions**: Step-by-step payment guide
+
+**Template Design:**
+- Clean, modern UI with purple gradient
+- Copy-friendly receiver numbers in large boxes
+- Prominent amount display
+- Auto-uppercase TrxID input
+- Mobile responsive
+- **Fully customizable** - all HTML/CSS in separate template file
+
+**JavaScript Features:**
+- Auto-uppercase TrxID as user types
+- Prevents double submission
+- AJAX form submission
+- Success/error handling
+- Thank you screen on success
+
+**Notes for Next Phases:**
+- Template file can be modified independently
+- Ready for Phase 6 (TrxID submission endpoint)
+- Form action points to `/bkash-personal/:trackingId/submit-trx`
+- All styling inline in template for easy customization
 
 ---
 
@@ -307,31 +466,79 @@ interface ParseResult {
 - Return success response without blocking
 
 ### Tasks
-- [ ] Create `src/routes/submit-trx.ts` route handler
-- [ ] Parse TrxID from request body (JSON or form-encoded)
-- [ ] Normalize TrxID (trim, uppercase)
-- [ ] Update tracking record with user_entered_trxid
-- [ ] Change status to 'submitted_trx'
-- [ ] Update updated_at timestamp
-- [ ] Query transactions_table for matching TrxID
-- [ ] If found, call verification service
-- [ ] Return success message immediately
-- [ ] Handle already-submitted and expired sessions
+- [x] Create `src/routes/submit-trx.ts` route handler
+- [x] Parse TrxID from request body (JSON or form-encoded)
+- [x] Normalize TrxID (trim, uppercase)
+- [x] Update tracking record with user_entered_trxid
+- [x] Change status to 'submitted_trx'
+- [x] Update updated_at timestamp
+- [x] Query transactions_table for matching TrxID
+- [x] If found, call verification service
+- [x] Return success message immediately
+- [x] Handle already-submitted and expired sessions
 
 ### Acceptance Criteria
-- POST accepts both JSON and form-encoded data
-- Updates tracking record with normalized TrxID
-- Changes status to 'submitted_trx'
-- Attempts immediate verification
-- Returns success message without waiting
-- Handles duplicate submissions gracefully
-- Returns error for expired sessions
+- [x] POST accepts both JSON and form-encoded data
+- [x] Updates tracking record with normalized TrxID
+- [x] Changes status to 'submitted_trx'
+- [x] Attempts immediate verification
+- [x] Returns success message without waiting
+- [x] Handles duplicate submissions gracefully
+- [x] Returns error for expired sessions
 
 ### Questions Before Starting
-*To be determined after Phase 5*
+None - straightforward implementation
 
 ### Context for Future Phases
-*To be filled after completion*
+
+**Completed:** Phase 6 - POST /bkash-personal/:trackingId/submit-trx
+
+**Files Created/Modified:**
+- `src/routes/submitTrx.ts` - TrxID submission handler
+- `src/index.ts` - Added POST route
+- `src/templates/paymentPage.ts` - Added copy-to-clipboard functionality
+
+**Endpoint:** `POST /bkash-personal/:trackingId/submit-trx`
+
+**Request Body:**
+- JSON: `{"trxid": "CJU0PZQ3U6"}`
+- Form: `trxid=CJU0PZQ3U6`
+
+**Response:** (200 OK)
+```json
+{
+  "status": "submitted",
+  "message": "Thank you! Your Transaction ID has been submitted..."
+}
+```
+
+**Features:**
+- **Dual Format Support**: Accepts both JSON and form-encoded data
+- **TrxID Normalization**: Uses `normalizeTrxID()` from SMS parser
+- **Status Checks**: Expired, already verified, already submitted
+- **Immediate Verification Attempt**: Checks if transaction exists
+- **Non-blocking Response**: Returns immediately, verification happens separately
+- **Duplicate Prevention**: Handles re-submissions gracefully
+
+**Copy-to-Clipboard Enhancement (Phase 5 bonus):**
+- Copy icon beside each receiver number
+- Visual feedback (button turns green, text changes to "Copied!")
+- 2-second timeout before reset
+- SVG icon for copy action
+- Mobile-friendly touch targets
+
+**Status Handling:**
+- 400: Invalid/missing TrxID
+- 404: Tracking session not found
+- 410: Session expired
+- 200: Already verified (with message)
+- 200: Successfully submitted
+
+**Notes for Next Phases:**
+- Verification logic will be called in Phase 7
+- Currently just logs if transaction found
+- Cron job will retry verification (Phase 10)
+- Ready for Phase 7 (Verification Service implementation)
 
 ---
 
@@ -345,33 +552,90 @@ interface ParseResult {
 - Handle all failure scenarios
 
 ### Tasks
-- [ ] Create `src/services/verification.ts` module
-- [ ] Implement TrxID matching (normalized, case-insensitive)
-- [ ] Implement amount matching (strict equality)
-- [ ] Implement receiver matching (in offered_receivers array)
-- [ ] Implement time window validation
-- [ ] Check for duplicate TrxID usage
-- [ ] Update tracking status to 'verified' on success
-- [ ] Set matched_transaction_id on success
-- [ ] Set status to 'failed' with notes on failure
-- [ ] Return verification result object
-- [ ] Add logging for all verification attempts
+- [x] Create `src/services/verification.ts` module
+- [x] Implement TrxID matching (normalized, case-insensitive)
+- [x] Implement amount matching (strict equality)
+- [x] Implement receiver matching (in offered_receivers array)
+- [x] Implement time window validation
+- [x] Check for duplicate TrxID usage
+- [x] Update tracking status to 'verified' on success
+- [x] Set matched_transaction_id on success
+- [x] Set status to 'failed' with notes on failure
+- [x] Return verification result object
+- [x] Add logging for all verification attempts
 
 ### Acceptance Criteria
-- Verifies only when all rules pass
-- Correctly matches amount in cents
-- Validates receiver is in offered list
-- Enforces time window (created_at - 1hr to expires_at + 15min)
-- Prevents duplicate TrxID usage
-- Sets clear failure reasons in notes field
-- Updates tracking record transactionally
-- Returns structured result (success/failure + reason)
+- [x] Verifies only when all rules pass
+- [x] Correctly matches amount in cents
+- [x] Validates receiver is in offered list
+- [x] Enforces time window (created_at - 1hr to expires_at + 15min)
+- [x] Prevents duplicate TrxID usage
+- [x] Sets clear failure reasons in notes field
+- [x] Updates tracking record transactionally
+- [x] Returns structured result (success/failure + reason)
 
 ### Questions Before Starting
-*To be determined after Phase 6*
+None - clear specification from architecture
 
 ### Context for Future Phases
-*To be filled after completion*
+
+**Completed:** Phase 7 - Verification Service
+
+**Files Created/Modified:**
+- `src/services/verification.ts` - Core verification logic
+- `src/routes/submitTrx.ts` - Integrated verification call
+
+**Key Functions:**
+```typescript
+verifyPayment(tracking, transaction, db): Promise<VerificationResult>
+attemptVerification(trackingId, db): Promise<VerificationResult>
+verifyIncomingTransaction(transactionId, db): Promise<VerificationResult[]>
+```
+
+**Verification Rules (All Must Pass):**
+1. **TrxID Match**: Normalized comparison (trim, uppercase)
+2. **Amount Match**: Exact match in cents (no tolerance)
+3. **Receiver Match**: transaction.receiver_phone in tracking.offered_receivers
+4. **Time Window**: tracking.created_at - 1hr to tracking.expires_at + 15min
+5. **No Duplicates**: TrxID not already matched to another verified session
+
+**Return Type:**
+```typescript
+interface VerificationResult {
+  success: boolean
+  status: 'verified' | 'failed' | 'pending'
+  message: string
+  matched_transaction_id?: string
+  failure_reason?: string
+}
+```
+
+**Status Updates:**
+- **Success**: Updates to `'verified'`, sets `matched_transaction_id`, notes "Verified successfully"
+- **Failed**: Updates to `'failed'`, sets detailed `failure_reason` in notes
+- **Pending**: Leaves as `'submitted_trx'` for retry (transaction not found yet)
+
+**Time Window Logic:**
+- Earliest: tracking.created_at - 1 hour (allows pre-submission payments)
+- Latest: tracking.expires_at + 15 minutes (grace period for clock skew)
+
+**Three Verification Paths:**
+1. **attemptVerification()**: Called from submitTrx when user submits TrxID
+2. **verifyIncomingTransaction()**: Called from webhook when SMS arrives
+3. **Cron sweep**: Retries pending verifications (Phase 10)
+
+**Integration:**
+- submitTrx now calls `attemptVerification()` immediately
+- Returns 'verified' status if successful
+- Returns 'submitted' if pending (hides failure details from user)
+- Logs all verification results for debugging
+
+**Notes for Next Phases:**
+- Ready for Phase 8 (SMS webhook integration)
+- Verification logic complete and testable
+- Handles all edge cases from architecture document
+- Duplicate TrxID prevention working
+- Time window with grace period implemented
 
 ---
 
@@ -386,77 +650,111 @@ interface ParseResult {
 - Handle idempotency via unique TrxID
 
 ### Tasks
-- [ ] Create `src/routes/webhook-sms.ts` route handler
-- [ ] Accept JSON with raw_sms and receiver_phone
-- [ ] Call SMS parser service
-- [ ] Validate receiver_phone exists in receivers_table
-- [ ] Validate parsed amount > 0
-- [ ] Insert into transactions_table
-- [ ] Handle duplicate TrxID (return existing record)
-- [ ] Query for matching pending tracking sessions
-- [ ] Call verification service for matches
-- [ ] Return parsed data in response
-- [ ] Add basic rate limiting (IP-based)
-- [ ] Log all webhook calls
+- [x] Create `src/routes/webhook-sms.ts` route handler
+- [x] Accept JSON with raw_sms and receiver_phone
+- [x] Call SMS parser service
+- [x] Validate receiver_phone exists in receivers_table
+- [x] Validate parsed amount > 0
+- [x] Insert into transactions_table
+- [x] Handle duplicate TrxID (return existing record)
+- [x] Query for matching pending tracking sessions
+- [x] Call verification service for matches
+- [x] Return parsed data in response
+- [x] Log all webhook calls
 
 ### Acceptance Criteria
-- POST /webhooks/sms accepts raw SMS text
-- Parses all fields correctly
-- Validates receiver is in allowlist
-- Stores transaction with unique TrxID
-- Idempotent (duplicate TrxID returns 200 with existing data)
-- Triggers verification for matching sessions
-- Returns 400 for parsing failures with clear error
-- Returns 400 for invalid receiver
-- Logs all attempts for debugging
+- [x] POST /webhooks/sms accepts raw SMS text
+- [x] Parses all fields correctly
+- [x] Validates receiver is in allowlist
+- [x] Stores transaction with unique TrxID
+- [x] Idempotent (duplicate TrxID returns 200 with existing data)
+- [x] Triggers verification for matching sessions
+- [x] Returns 400 for parsing failures with clear error
+- [x] Returns 400 for invalid receiver
+- [x] Logs all attempts for debugging
 
 ### Questions Before Starting
-*To be determined after Phase 7*
+None - straightforward integration of Phase 2 and Phase 7 work
 
 ### Context for Future Phases
-*To be filled after completion*
+
+**Completed:** Phase 8 - POST /webhooks/sms - SMS Ingestion
+
+**Files Created/Modified:**
+- `src/routes/webhook-sms.ts` - Webhook endpoint for SMS ingestion
+- `src/index.ts` - Added POST /webhooks/sms route
+
+**Endpoint:** `POST /webhooks/sms`
+
+**Request Body:**
+```json
+{
+  "raw_sms": "You have received Tk 500.00 from 01533817247. Fee Tk 0.00. Balance Tk 1,117.78. TrxID CJU0PZQ3U6 at 30/10/2025 21:02",
+  "receiver_phone": "01785863769"
+}
+```
+
+**Response:** (201 Created for new, 200 OK for duplicate)
+```json
+{
+  "success": true,
+  "is_new": true,
+  "transaction": {
+    "id": "01K8WC96AS95G1G70WCHR24RQF",
+    "trxid": "CJU0PZQ3U6",
+    "sender_phone": "01533817247",
+    "receiver_phone": "01785863769",
+    "amount_cents": 50000,
+    "received_at": "2025-10-30T15:02:00.000Z"
+  },
+  "parsed_data": {
+    "amount_cents": 50000,
+    "trxid": "CJU0PZQ3U6",
+    "sender_phone": "01533817247",
+    "received_at": "2025-10-30T15:02:00.000Z"
+  },
+  "verification": {
+    "attempted": 1,
+    "verified": 0
+  }
+}
+```
+
+**Features:**
+- **SMS Parsing**: Uses Phase 2 parser to extract all fields
+- **Receiver Validation**: Checks against receivers_table
+- **Amount Validation**: Ensures amount > 0
+- **Idempotency**: Duplicate TrxID returns existing transaction with `is_new: false`
+- **Auto-Verification**: Calls `verifyIncomingTransaction()` for matching pending sessions
+- **Detailed Response**: Returns parsed data and verification results
+- **Error Handling**: Clear error messages for parsing failures, invalid receivers
+
+**Validation Errors:**
+- 400: Missing required fields (raw_sms or receiver_phone)
+- 400: SMS parsing failed (with field details)
+- 400: Invalid or inactive receiver
+- 400: Invalid amount (≤ 0)
+- 500: Database errors
+
+**Verification Flow:**
+1. Parse SMS with regex patterns
+2. Validate receiver exists and is active
+3. Create transaction (idempotent via TrxID)
+4. Find all pending tracking sessions with matching TrxID
+5. Attempt verification for each match
+6. Return transaction + verification counts
+
+**Tested:** ✓ Successfully ingested SMS and created transaction
+
+**Notes for Next Phases:**
+- Verification attempted but no sessions matched (expected - no pending session with that TrxID yet)
+- Rate limiting deferred to Post-MVP (can add Cloudflare rate limiting rules)
+- Ready for Phase 9 (Cron job for periodic verification)
+- Admin-Ops app (Phase 12) will POST to this endpoint
 
 ---
 
-## Phase 9: POST /admin/paste-sms - Admin Interface
-
-### Goals
-- Provide manual SMS entry interface
-- Simple HTML form for admins
-- Forward to webhook internally
-- Display parsing results
-- Optional basic auth protection
-
-### Tasks
-- [ ] Create `src/routes/admin-paste.ts` route handler
-- [ ] Create GET /admin/paste-sms HTML form
-- [ ] Add textarea for raw SMS text
-- [ ] Add dropdown/input for receiver phone selection
-- [ ] Create POST /admin/paste-sms handler
-- [ ] Forward to webhook SMS endpoint internally
-- [ ] Display success with parsed data
-- [ ] Display errors from parser
-- [ ] Add basic auth middleware (optional for MVP)
-- [ ] Style form for usability
-
-### Acceptance Criteria
-- GET /admin/paste-sms returns HTML form
-- Form has textarea and receiver selection
-- POST forwards to webhook endpoint
-- Displays parsed transaction data on success
-- Shows clear error messages on failure
-- Form is usable on mobile devices
-- Basic auth protects endpoint (optional)
-
-### Questions Before Starting
-*To be determined after Phase 8*
-
-### Context for Future Phases
-*To be filled after completion*
-
----
-
-## Phase 10: Scheduled Verification Sweep (Cron)
+## Phase 9: Scheduled Verification Sweep (Cron)
 
 ### Goals
 - Run periodic verification checks
@@ -465,34 +763,103 @@ interface ParseResult {
 - Keep system self-healing
 
 ### Tasks
-- [ ] Configure cron trigger in wrangler.jsonc (every 5 minutes)
-- [ ] Create `src/routes/cron.ts` scheduled handler
-- [ ] Query for sessions with status 'pending' or 'submitted_trx' where expires_at < now
-- [ ] Update expired sessions to status 'expired'
-- [ ] Query for sessions with status 'submitted_trx' and user_entered_trxid not null
-- [ ] For each, attempt verification against transactions_table
-- [ ] Update verified sessions
-- [ ] Log sweep results (expired count, verified count)
-- [ ] Handle errors gracefully
+- [x] Configure cron trigger in wrangler.jsonc (every 5 minutes)
+- [x] Create `src/scheduled/cron.ts` scheduled handler
+- [x] Query for sessions with status 'pending' or 'submitted_trx' where expires_at < now
+- [x] Update expired sessions to status 'expired'
+- [x] Query for sessions with status 'submitted_trx' and user_entered_trxid not null
+- [x] For each, attempt verification against transactions_table
+- [x] Update verified sessions
+- [x] Log sweep results (expired count, verified count)
+- [x] Handle errors gracefully
 
 ### Acceptance Criteria
-- Cron runs every 5 minutes
-- Expires sessions past their deadline
-- Retries verification for submitted sessions
-- Updates status appropriately
-- Logs activity for monitoring
-- Doesn't fail entire sweep if one record errors
-- Completes within Worker CPU time limits
+- [x] Cron runs every 5 minutes
+- [x] Expires sessions past their deadline
+- [x] Retries verification for submitted sessions
+- [x] Updates status appropriately
+- [x] Logs activity for monitoring
+- [x] Doesn't fail entire sweep if one record errors
+- [x] Completes within Worker CPU time limits
 
 ### Questions Before Starting
-*To be determined after Phase 9*
+None - clear implementation from Phase 3 and Phase 7
 
 ### Context for Future Phases
-*To be filled after completion*
+
+**Completed:** Phase 9 - Scheduled Verification Sweep (Cron)
+
+**Files Created/Modified:**
+- `src/scheduled/cron.ts` - Scheduled handler for periodic verification
+- `src/routes/test-cron.ts` - Manual trigger endpoint for testing
+- `src/index.ts` - Registered scheduled handler, added test endpoint
+- `wrangler.jsonc` - Added cron trigger configuration
+
+**Cron Configuration:**
+```jsonc
+"triggers": {
+  "crons": ["*/5 * * * *"]  // Every 5 minutes
+}
+```
+
+**Export Structure:**
+```typescript
+export default {
+  fetch: app.fetch,           // HTTP request handler
+  scheduled: scheduledHandler // Cron job handler
+}
+```
+
+**Scheduled Handler Logic:**
+1. Find expired sessions (`expires_at < now`)
+2. Batch update to `status = 'expired'`
+3. Find pending sessions with submitted TrxID
+4. Retry verification for each session
+5. Log summary statistics
+
+**Error Handling:**
+- Try-catch per session (one failure doesn't stop sweep)
+- Logs errors with session ID for debugging
+- Continues processing remaining sessions
+- Throws error only if entire sweep fails
+
+**Test Endpoint:** `GET /test/cron`
+- Manually triggers cron job for testing
+- Returns success/failure response
+- Should be removed or protected in production
+
+**Logging Output:**
+```
+[Cron] Starting verification sweep...
+[Cron] Expired 3 session(s)
+[Cron] Verified session 01K8... with TrxID ABC123
+[Cron] Failed session 01K9...: Amount mismatch
+[Cron] Sweep complete in 245ms: {
+  expired: 3,
+  verified: 1,
+  failed: 2,
+  still_pending: 5,
+  total_processed: 8
+}
+```
+
+**Performance:**
+- Uses database queries from Phase 3 (`findExpired()`, `findPendingVerification()`)
+- Batch expiry update for efficiency
+- Individual verification attempts (allows partial success)
+- Logs execution time for monitoring
+
+**Tested:** ✓ Manually triggered via `/test/cron` endpoint
+
+**Notes for Next Phases:**
+- Cron will run automatically every 5 minutes in production
+- Test endpoint should be removed or add authentication before production deploy
+- Ready for Phase 10 (Fulfillment Flow)
+- Works with verification service from Phase 7
 
 ---
 
-## Phase 11: Fulfillment Flow (Stubbed)
+## Phase 10: Fulfillment Flow (Stubbed)
 
 ### Goals
 - Trigger on status change to 'verified'
@@ -529,7 +896,7 @@ interface ParseResult {
 
 ---
 
-## Phase 12: Integration Testing & Deployment
+## Phase 11: Integration Testing & Deployment
 
 ### Goals
 - Test complete end-to-end flow
@@ -545,7 +912,7 @@ interface ParseResult {
 - [ ] Test session expiry
 - [ ] Test SMS arrives before TrxID submission
 - [ ] Test delayed SMS (cron sweep catches it)
-- [ ] Test manual admin paste interface
+- [ ] Test manual admin paste interface (via admin-ops app)
 - [ ] Review all error messages for clarity
 - [ ] Deploy to Cloudflare Workers production
 - [ ] Verify D1 database in production
@@ -565,9 +932,68 @@ interface ParseResult {
 - Documentation complete
 
 ### Questions Before Starting
-*To be determined after Phase 11*
+*To be determined after Phase 10*
 
 ### Context for Future Phases
+*To be filled after completion*
+
+---
+
+## Phase 12: Admin-Ops - SMS Paste Interface (SvelteKit)
+
+### Goals
+- Create dedicated admin interface for manual SMS entry
+- Build in separate SvelteKit application (admin-ops)
+- POST to Hono webhook endpoint
+- Display parsing results and verification status
+- Foundation for future admin features
+
+### Tasks
+- [ ] Create `admin-ops/src/routes/sms/+page.svelte` route
+- [ ] Build form with textarea for raw SMS input
+- [ ] Add dropdown/input for receiver phone selection
+- [ ] Implement form submission to Hono webhook endpoint
+- [ ] Handle CORS if needed (different origins)
+- [ ] Display success with parsed transaction data
+- [ ] Display error messages from parser
+- [ ] Style with consistent admin UI theme
+- [ ] Add form validation (required fields)
+- [ ] Show loading state during submission
+- [ ] Add "Recent Submissions" list (optional)
+
+### Acceptance Criteria
+- SvelteKit page renders SMS paste form
+- Form posts to `/webhooks/sms` on Hono worker
+- Displays parsed transaction details on success
+- Shows clear error messages on failure
+- Responsive design for mobile/tablet use
+- Loading states and user feedback
+- Can handle CORS between admin-ops and worker domains
+- Form is intuitive for non-technical admins
+
+### Questions Before Starting
+1. What should be the Hono worker URL in production? (for webhook endpoint)
+2. Should we add authentication/authorization? (basic auth, session, etc.)
+3. Any specific UI framework/library for admin-ops? (e.g., Tailwind, DaisyUI, Shadcn)
+
+### Context for Future Phases
+
+**Architecture Benefits:**
+- **Separation of Concerns**: Payment worker focuses solely on payment logic
+- **Scalability**: Admin features can grow independently
+- **Security**: Can add different auth for admin vs customer endpoints
+- **Future Features**: Dashboard, analytics, manual overrides, customer support tools
+- **Same Infrastructure**: Both deploy to Cloudflare Workers
+
+**Admin-Ops Future Enhancements:**
+- Payment dashboard (view all sessions, filter by status)
+- Manual verification override
+- Customer lookup and support tools
+- Analytics and reporting
+- Receiver management (add/disable numbers)
+- Configuration management
+- Audit logs
+
 *To be filled after completion*
 
 ---
@@ -655,8 +1081,10 @@ src/
 
 ## Current Status
 
-**Active Phase:** Phase 1 - Project Setup & Database Schema
+**Active Phase:** Phase 10 - Fulfillment Flow (Stubbed)
 
-**Blocked On:** Clarifying questions for Phase 1
+**Next Up:** Phase 11 (Integration Testing & Deployment), Phase 12 (Admin-Ops UI)
+
+**Completed Phases:** 1-9
 
 **Last Updated:** October 31, 2025

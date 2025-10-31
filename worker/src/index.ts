@@ -1,6 +1,13 @@
 import { Hono } from "hono";
+import type { Bindings } from "./types/database";
+import { createTrackingSession } from "./routes/track";
+import { getPaymentPage } from "./routes/paymentPage";
+import { submitTrxID } from "./routes/submitTrx";
+import { handleWebhookSMS } from "./routes/webhook-sms";
+import { scheduledHandler } from "./scheduled/cron";
+import { triggerCronManually } from "./routes/test-cron";
 
-const app = new Hono<{ Bindings: CloudflareBindings }>();
+const app = new Hono<{ Bindings: Bindings }>();
 
 app.get("/", (c) => {
   return c.json({ 
@@ -13,7 +20,7 @@ app.get("/", (c) => {
 // Health check endpoint that verifies DB connection
 app.get("/health", async (c) => {
   try {
-    const db = c.env.bkash_payment_ch0;
+    const db = c.env.DB;
     const result = await db.prepare("SELECT COUNT(*) as count FROM receivers_table WHERE status = 'active'").first();
     
     return c.json({
@@ -30,4 +37,22 @@ app.get("/health", async (c) => {
   }
 });
 
-export default app;
+// POST /track - Create payment tracking session
+app.post("/track", createTrackingSession);
+
+// GET /bkash-personal/:trackingId - Display payment page
+app.get("/bkash-personal/:trackingId", getPaymentPage);
+
+// POST /bkash-personal/:trackingId/submit-trx - Submit TrxID
+app.post("/bkash-personal/:trackingId/submit-trx", submitTrxID);
+
+// POST /webhooks/sms - SMS ingestion webhook
+app.post("/webhooks/sms", handleWebhookSMS);
+
+// GET /test/cron - Manually trigger cron job (dev only)
+app.get("/test/cron", triggerCronManually);
+
+export default {
+  fetch: app.fetch,
+  scheduled: scheduledHandler
+};

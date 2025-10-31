@@ -1,5 +1,12 @@
 // Database model types for bKash payment channel
 
+import type { D1Database } from '@cloudflare/workers-types'
+
+// Cloudflare Worker Bindings
+export interface Bindings {
+  DB: D1Database
+}
+
 export type ReceiverStatus = 'active' | 'disabled';
 
 export interface Receiver {
